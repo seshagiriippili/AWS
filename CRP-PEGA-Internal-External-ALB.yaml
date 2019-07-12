@@ -1,0 +1,820 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: 'CRP-PEGA: ALB, Web (EC2, AutoRecovery), DNS'
+Outputs:
+  ApplicationLoadBalancer:
+    Value: !Ref ApplicationLoadBalancer
+  sgELBPrivate:
+    Value: !Ref sgELBPrivate
+  ApplicationLoadBalancerPublic:
+    Value: !Ref ApplicationLoadBalancerPublic
+  sgELBPublic:
+    Value: !Ref sgELBPublic
+  sgWeb:
+    Value: !Ref sgWeb
+Parameters:
+  EnvironmentPar:
+    Default: DEVTEST
+    Type: String
+    AllowedValues:
+      - DEVTEST
+      - PREPROD
+      - PROD
+      - SANDBOX
+    ConstraintDescription: 'must specify DEVTEST, PREPROD, PROD or SANDBOX.'
+  SubEnvironment:
+    Default: ''
+    Type: String
+    AllowedValues:
+      - ''
+      - sit
+      - uat
+      - bis
+      - devtest
+      - preprod
+      - prod
+    ConstraintDescription: must specify empty string or sit/uat/bis/devtest/preprod/prod.
+  SubEnvironmentuppercase:
+    Default: ''
+    Type: String
+    AllowedValues:
+      - ''
+      - SIT
+      - UAT
+      - BIS
+      - DEVTEST
+      - PREPROD
+      - PROD
+    ConstraintDescription: must specify empty string or sit/uat/bis/devtest/preprod/prod.    
+  EnvInstanceType:
+    Default: c4.2xlarge
+    Type: String
+  VPC:
+    Type: 'AWS::EC2::VPC::Id'
+  r53ExternalDomain:
+    Default: itsasp.com.
+    Type: String
+  r53publicdns:
+    Default: crp-pega-devtest-public.itsasp.com
+    Type: String
+    AllowedValues:
+      - crp-pega-uat-public.itsasp.com
+      - crp-pega-sit-public.itsasp.com
+      - crp-pega-st-public.itsasp.com
+      - crp-pega-devtest-public.itsasp.com
+      - crp-pega-preprod-public.itsasp.com
+      - crp-pega-prod-public.itsasp.com
+    ConstraintDescription: >-
+      must specify crp-pega-sit.itsasp.com, crp-pega-uat.itsasp.com,
+      crp-pega-st.itsasp.com, crp-pega-devtest.itsasp.com, crp-pega-preprod.itsasp.com,
+      crp-pega-prod.itsasp.com
+  r53InternalDomain:
+    Default: devtest.its.
+    Type: String
+    AllowedValues:
+      - devtest.its.
+      - preprod.its.
+      - prod.its.
+    ConstraintDescription: >-
+      must specify .devtest.its, preprod.com, prod.its        
+  r53privatedns:
+    Default: crp-pega-devtest.devtest.its
+    Type: String
+    AllowedValues:
+      - crp-pega-uat.devtest.its
+      - crp-pega-sit.devtest.its
+      - crp-pega-st.devtest.its
+      - crp-pega-devtest.devtest.its
+      - crp-pega.preprod.its
+      - crp-pega.prod.its
+    ConstraintDescription: >-
+      must specify crp-pega-sit.itsasp.com, crp-pega-uat.itsasp.com,
+      crp-pega-st.itsasp.com, crp-pega-devtest.itsasp.com, crp-pega-preprod.itsasp.com,
+      crp-pega-prod.itsasp.com      
+  s3bucketELBLog:
+    Default: doj-its-devtest-logs
+    Type: String
+    AllowedValues:
+      - doj-its-devtest-logs
+      - doj-its-preprod-logs
+      - doj-its-prod-logs
+      - doj-sandbox-logs
+    ConstraintDescription: >-
+      must specify doj-its-devtest-logs, doj-its-preprod-logs, doj-its-prod-logs
+      or doj-sandbox-logs
+  keyNameParam:
+    Type: 'AWS::EC2::KeyPair::KeyName'
+  IamRole:
+    Default: DEVTEST-Web
+    Type: String
+    AllowedValues:
+      - DEVTEST-Web
+      - PREPROD-Web
+      - PROD-Web
+      - SANDBOX-Web
+    ConstraintDescription: 'must specify DEVTEST-Web, PREPROD-Web, PROD-Web or SANDBOX-Web'
+  amiWeb:
+    Default: ''
+    Type: String
+  sgMANAGED:
+    Type: 'AWS::EC2::SecurityGroup::Id'
+  sgNATed:
+    Type: 'AWS::EC2::SecurityGroup::Id'
+  sgDB:
+    Type: 'AWS::EC2::SecurityGroup::Id'
+  sgNginx:
+    Type: 'AWS::EC2::SecurityGroup::Id'
+  snAppA:
+    Type: 'AWS::EC2::Subnet::Id'
+  snAppB:
+    Type: 'AWS::EC2::Subnet::Id'
+  snAppApublic:
+    Type: 'AWS::EC2::Subnet::Id'
+  snAppBpublic:
+    Type: 'AWS::EC2::Subnet::Id'
+  topicEvents:
+    Default: 'arn:aws:sns:ap-southeast-2:815913303858:DEVTEST-Events'
+    Type: String
+    AllowedValues:
+      - 'arn:aws:sns:ap-southeast-2:815913303858:DEVTEST-Events'
+      - 'arn:aws:sns:ap-southeast-2:815913303858:PREPROD-Events'
+      - 'arn:aws:sns:ap-southeast-2:815913303858:PROD-Events'
+      - 'arn:aws:sns:ap-southeast-2:388779194609:SANDBOX-Events'
+    ConstraintDescription: >-
+      must specify arn:aws:sns:ap-southeast-2:815913303858:DEVTEST-Events,
+      arn:aws:sns:ap-southeast-2:815913303858:PREPROD-Events,
+      arn:aws:sns:ap-southeast-2:815913303858:PROD-Events or
+      arn:aws:sns:ap-southeast-2:388779194609:SANDBOX-Events
+  AppLoadBalancerCertificateArn:
+    Type: String
+    Default: >-
+      arn:aws:acm:ap-southeast-2:815913303858:certificate/d781a4bc-56e6-49f7-b7f6-f963ae6c77ec
+Resources:
+  ApplicationLoadBalancer:
+    Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
+    Properties:
+      Scheme: internal
+      Type: application
+      IpAddressType: ipv4
+      Name: !Join 
+            - '-'
+            - - CRP-PEGA
+              - !Ref SubEnvironmentuppercase
+              - Private
+      SecurityGroups:
+        - !Ref sgELBPrivate
+      Subnets:
+        - !Ref snAppA
+        - !Ref snAppB
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '60'
+        - Key: access_logs.s3.enabled
+          Value: 'true'
+        - Key: access_logs.s3.bucket
+          Value: !Ref s3bucketELBLog
+        - Key: access_logs.s3.prefix
+          Value: !Join 
+            - '-'
+            - - CRP-PEGA
+              - !Ref SubEnvironmentuppercase
+              - Private
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentPar
+        - Key: Stack
+          Value: !Join 
+            - '-'
+            - - CRP-PEGA
+              - !Ref SubEnvironmentuppercase
+              - Private
+        - Key: Environment
+          Value: !Ref EnvironmentPar
+        - Key: Cost Center
+          Value: 3084020100
+        - Key: Department
+          Value: Victim Services
+        - Key: Owner
+          Value: DTS Operation
+        - Key: Description
+          Value: !Join 
+            - '-'
+            - - CRP-PEGA
+              - !Ref SubEnvironmentuppercase          
+        - Key: Type
+          Value: App
+        - Key: Application
+          Value: CRP-PEGA
+  ALBListener:
+    Type: 'AWS::ElasticLoadBalancingV2::Listener'
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: '80'
+      Protocol: HTTP
+  ALBTargetGroup:
+    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
+    Properties:
+      HealthCheckIntervalSeconds: 15
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 6
+      HealthCheckPath: /prweb/archive.info
+      UnhealthyThresholdCount: 2
+      Port: 80
+      Protocol: HTTP
+      Matcher:
+        HttpCode: 200
+      VpcId: !Ref VPC
+      Targets:
+        - Id: !Ref instanceWebServer1
+          Port: 80
+        - Id: !Ref instanceWebServer2
+          Port: 80
+      TargetGroupAttributes:
+        - Key: stickiness.enabled
+          Value: 'true'
+        - Key: stickiness.type
+          Value: lb_cookie
+        - Key: stickiness.lb_cookie.duration_seconds
+          Value: '3600'
+        - Key: deregistration_delay.timeout_seconds
+          Value: '300'
+  dnsPrivate:
+    Type: 'AWS::Route53::RecordSetGroup'
+    Properties:
+      HostedZoneName: !Ref r53InternalDomain
+      RecordSets:
+        - Name: !Ref r53privatedns
+          Type: CNAME
+          AliasTarget:
+            HostedZoneId: !GetAtt 
+              - ApplicationLoadBalancer
+              - CanonicalHostedZoneID
+            DNSName: !GetAtt 
+              - ApplicationLoadBalancer
+              - DNSName
+  ApplicationLoadBalancerPublic:
+    Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
+    Properties:
+      Scheme: internet-facing
+      Type: application
+      IpAddressType: ipv4
+      Name: !Join 
+            - '-'
+            - - CRP-PEGA
+              - !Ref SubEnvironmentuppercase
+              - Public
+      SecurityGroups:
+        - !Ref sgELBPublic
+      Subnets:
+        - !Ref snAppApublic
+        - !Ref snAppBpublic
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentPar
+        - Key: Stack
+          Value: !Join 
+            - '-'
+            - - CRP-PEGA
+              - !Ref EnvironmentPar
+              - Public
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentPar
+        - Key: Stack
+          Value: !Join 
+            - '-'
+            - - !Ref EnvironmentPar
+              - CRP-PEGA
+        - Key: Environment
+          Value: !Ref EnvironmentPar
+        - Key: Cost Center
+          Value: 3084020100
+        - Key: Department
+          Value: Victim Services    
+        - Key: Owner
+          Value: DTS Operation
+        - Key: Description
+          Value: !Join 
+            - '-'
+            - - CRP-PEGA
+              - !Ref EnvironmentPar
+        - Key: Type
+          Value: App
+        - Key: Application
+          Value: CRP-PEGA
+  ALBListenerPublic:
+    Type: 'AWS::ElasticLoadBalancingV2::Listener'
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroupPublic
+      LoadBalancerArn: !Ref ApplicationLoadBalancerPublic
+      Certificates:
+        - CertificateArn: !Ref AppLoadBalancerCertificateArn
+      Port: '443'
+      Protocol: HTTPS
+  ALBTargetGroupPublic:
+    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
+    Properties:
+      HealthCheckIntervalSeconds: 15
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 6
+      HealthCheckPath: /prweb/archive.info
+      UnhealthyThresholdCount: 2
+      Port: 80
+      Protocol: HTTP
+      Matcher:
+        HttpCode: 200
+      VpcId: !Ref VPC
+      Targets:
+        - Id: !Ref instanceWebServer1
+          Port: 80
+        - Id: !Ref instanceWebServer2
+          Port: 80
+      TargetGroupAttributes:
+        - Key: stickiness.enabled
+          Value: 'true'
+        - Key: stickiness.type
+          Value: lb_cookie
+        - Key: stickiness.lb_cookie.duration_seconds
+          Value: '3600'
+        - Key: deregistration_delay.timeout_seconds
+          Value: '300'
+  dnsPublic:
+    Type: 'AWS::Route53::RecordSetGroup'
+    Properties:
+      HostedZoneName: !Ref r53ExternalDomain
+      RecordSets:
+        - Name: !Ref r53publicdns
+          Type: CNAME
+          AliasTarget:
+            HostedZoneId: !GetAtt 
+              - ApplicationLoadBalancerPublic
+              - CanonicalHostedZoneID
+            DNSName: !GetAtt 
+              - ApplicationLoadBalancerPublic
+              - DNSName
+  instanceWebServer1:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      DisableApiTermination: false
+      EbsOptimized: true
+      IamInstanceProfile: !Ref IamRole
+      ImageId: !Ref amiWeb
+      InstanceInitiatedShutdownBehavior: stop
+      InstanceType: !Ref EnvInstanceType
+      KeyName: !Ref keyNameParam
+      Monitoring: true
+      NetworkInterfaces:
+        - DeleteOnTermination: 'true'
+          Description: Primary network interface
+          DeviceIndex: 0
+          GroupSet:
+            - !Ref sgWeb
+            - !Ref sgNATed
+            - !Ref sgMANAGED
+          SubnetId: !Ref snAppA
+      Tags:
+        - Key: Name
+          Value: !Join 
+            - '-'
+            - - !Ref EnvironmentPar
+              - CRP-PEGA
+              - !Ref SubEnvironmentuppercase
+        - Key: Stack
+          Value: !Join 
+            - '-'
+            - - !Ref EnvironmentPar
+              - CRP-PEGA
+        - Key: Environment
+          Value: !Ref EnvironmentPar
+        - Key: Cost Center
+          Value: 3084020100
+        - Key: Department
+          Value: Victim Services             
+        - Key: Owner
+          Value: DTS Operation
+        - Key: Description
+          Value: !Join 
+            - '-'
+            - - CRP-PEGA
+              - !Ref SubEnvironmentuppercase
+        - Key: Type
+          Value: Web
+        - Key: Application
+          Value: CRP-PEGA
+      UserData: !Base64 
+        'Fn::Join':
+          - ''
+          - - <powershell>
+            - Read-S3Object -BucketName doj-its-config -KeyPrefix "
+            - !Ref EnvironmentPar
+            - |
+              /CRP-PEGA/Web/Bootstrap" -Folder "C:\Bootstrap" 
+            - 'C:\Bootstrap\bootstrap.ps1 '
+            - !Ref SubEnvironment
+            - |+
+
+            - </powershell>
+  alarmRecoverWebServer1:
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      Statistic: Minimum
+      EvaluationPeriods: 2
+      MetricName: StatusCheckFailed_System
+      Namespace: AWS/EC2
+      Threshold: '0.0'
+      ComparisonOperator: GreaterThanThreshold
+      Period: 60
+      AlarmDescription: Recover WebServer 1
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref instanceWebServer1
+      AlarmActions:
+        - 'arn:aws:automate:ap-southeast-2:ec2:recover'
+        - !Ref topicEvents
+      ActionsEnabled: true
+  alarmHighWebCPUUtilizationServer1:
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      ActionsEnabled: true
+      AlarmActions:
+        - !Ref topicEvents
+      AlarmDescription: High Web CPU Utilization
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref instanceWebServer1
+      EvaluationPeriods: 1
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Period: 300
+      Statistic: Average
+      Threshold: '80.0'
+  instanceWebServer2:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      DisableApiTermination: false
+      EbsOptimized: true
+      IamInstanceProfile: !Ref IamRole
+      ImageId: !Ref amiWeb
+      InstanceInitiatedShutdownBehavior: stop
+      InstanceType: !Ref EnvInstanceType
+      KeyName: !Ref keyNameParam
+      Monitoring: true
+      NetworkInterfaces:
+        - DeleteOnTermination: 'true'
+          Description: Primary network interface
+          DeviceIndex: 0
+          GroupSet:
+            - !Ref sgWeb
+            - !Ref sgNATed
+            - !Ref sgMANAGED
+          SubnetId: !Ref snAppB
+      Tags:
+        - Key: Name
+          Value: !Join 
+            - '-'
+            - - !Ref EnvironmentPar
+              - CRP-PEGA
+              - !Ref SubEnvironmentuppercase
+        - Key: Stack
+          Value: !Join 
+            - '-'
+            - - !Ref EnvironmentPar
+              - CRP-PEGA
+        - Key: Environment
+          Value: !Ref EnvironmentPar
+        - Key: Cost Center
+          Value: 3084020100
+        - Key: Department
+          Value: Victim Services             
+        - Key: Owner
+          Value: DTS Operation
+        - Key: Description
+          Value: !Join 
+            - '-'
+            - - CRP-PEGA
+              - !Ref SubEnvironmentuppercase
+        - Key: Type
+          Value: Web
+        - Key: Application
+          Value: CRP-PEGA
+      UserData: !Base64 
+        'Fn::Join':
+          - ''
+          - - <powershell>
+            - Read-S3Object -BucketName doj-its-config -KeyPrefix "
+            - !Ref EnvironmentPar
+            - |
+              /CRP-PEGA/Web/Bootstrap" -Folder "C:\Bootstrap" 
+            - 'C:\Bootstrap\bootstrap.ps1 '
+            - !Ref SubEnvironment
+            - |+
+
+            - </powershell>
+  alarmRecoverWebServer2:
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      Statistic: Minimum
+      EvaluationPeriods: 2
+      MetricName: StatusCheckFailed_System
+      Namespace: AWS/EC2
+      Threshold: '0.0'
+      ComparisonOperator: GreaterThanThreshold
+      Period: 60
+      AlarmDescription: Recover WebServer 2
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref instanceWebServer2
+      AlarmActions:
+        - 'arn:aws:automate:ap-southeast-2:ec2:recover'
+        - !Ref topicEvents
+      ActionsEnabled: true
+  alarmHighWebCPUUtilizationServer2:
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      ActionsEnabled: true
+      AlarmActions:
+        - !Ref topicEvents
+      AlarmDescription: High Web CPU Utilization
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref instanceWebServer2
+      EvaluationPeriods: 1
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Period: 300
+      Statistic: Average
+      Threshold: '80.0'
+  sgWeb:
+    Properties:
+      GroupDescription: SG-CRP-PEGA-Web
+      SecurityGroupEgress:
+        - CidrIp: 10.0.0.0/8
+          FromPort: 25
+          IpProtocol: tcp
+          ToPort: 25
+        - CidrIp: 10.0.0.0/8
+          FromPort: 80
+          IpProtocol: tcp
+          ToPort: 80
+        - CidrIp: 10.0.0.0/8
+          FromPort: 8080
+          IpProtocol: tcp
+          ToPort: 8080
+        - CidrIp: 10.122.134.0/24
+          FromPort: 1521
+          IpProtocol: tcp
+          ToPort: 1521
+        - CidrIp: 10.122.135.0/24
+          FromPort: 1521
+          IpProtocol: tcp
+          ToPort: 1521
+        - CidrIp: 10.124.134.0/24
+          FromPort: 1521
+          IpProtocol: tcp
+          ToPort: 1521
+        - CidrIp: 10.124.135.0/24
+          FromPort: 1521
+          IpProtocol: tcp
+          ToPort: 1521
+        - CidrIp: 10.122.240.0/24
+          FromPort: 1521
+          IpProtocol: tcp
+          ToPort: 1521
+        - CidrIp: 10.124.240.0/24
+          FromPort: 1521
+          IpProtocol: tcp
+          ToPort: 1521
+      Tags:
+        - Key: Name
+          Value: sgCRPPEGA-Web
+        - Key: Stack
+          Value: !Join 
+            - '-'
+            - - !Ref EnvironmentPar
+              - CRP-PEGA
+        - Key: Environment
+          Value: !Ref EnvironmentPar
+        - Key: Cost Center
+          Value: 3084020100
+        - Key: Department
+          Value: Victim Services   
+        - Key: Owner
+          Value: DTS Operation
+        - Key: Description
+          Value: !Join 
+            - '-'
+            - - CRP-PEGA
+              - !Ref EnvironmentPar
+        - Key: Type
+          Value: Web
+        - Key: Application
+          Value: CRP-PEGA
+      VpcId: !Ref VPC
+    Type: 'AWS::EC2::SecurityGroup'
+  sgELBPrivate:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: SG-CRP-PEGA-ELB-Private
+      SecurityGroupIngress:
+        - CidrIp: 10.0.0.0/8
+          FromPort: 80
+          IpProtocol: tcp
+          ToPort: 80
+        - CidrIp: 10.0.0.0/8
+          FromPort: 8080
+          IpProtocol: tcp
+          ToPort: 8080
+      Tags:
+        - Key: Name
+          Value: sgCRPPEGA-ELBPrivate
+        - Key: Stack
+          Value: !Join 
+            - '-'
+            - - CRP-PEGA
+              - !Ref EnvironmentPar
+        - Key: Environment
+          Value: !Ref EnvironmentPar
+        - Key: Cost Center
+          Value: 3084020100
+        - Key: Department
+          Value: Victim Services   
+        - Key: Owner
+          Value: DTS Operation
+        - Key: Description
+          Value: !Join 
+            - '-'
+            - - CRP-PEGA
+              - !Ref EnvironmentPar
+          Value: CRP-PEGA Web
+        - Key: Type
+          Value: App
+        - Key: Application
+          Value: CRP-PEGA
+      VpcId: !Ref VPC
+  sgEgressELBPrivateToWeb80:
+    Type: 'AWS::EC2::SecurityGroupEgress'
+    Properties:
+      DestinationSecurityGroupId: !Ref sgWeb
+      GroupId: !Ref sgELBPrivate
+      IpProtocol: '-1'
+  sgIngressELBPrivateToWeb80:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      FromPort: 80
+      GroupId: !Ref sgWeb
+      IpProtocol: tcp
+      SourceSecurityGroupId: !Ref sgELBPrivate
+      ToPort: 80
+  sgIngressELBPrivateToWeb8080:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      FromPort: 8080
+      GroupId: !Ref sgWeb
+      IpProtocol: tcp
+      SourceSecurityGroupId: !Ref sgELBPrivate
+      ToPort: 8080
+  sgIngressELBPublicToWeb80:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      FromPort: 80
+      GroupId: !Ref sgWeb
+      IpProtocol: tcp
+      SourceSecurityGroupId: !Ref sgELBPublic
+      ToPort: 80
+  sgIngressELBPublicToWeb8080:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      FromPort: 8080
+      GroupId: !Ref sgWeb
+      IpProtocol: tcp
+      SourceSecurityGroupId: !Ref sgELBPublic
+      ToPort: 8080      
+  sgEgressWebToDB1433:
+    Type: 'AWS::EC2::SecurityGroupEgress'
+    Properties:
+      DestinationSecurityGroupId: !Ref sgDB
+      FromPort: 1433
+      GroupId: !Ref sgWeb
+      IpProtocol: tcp
+      ToPort: 1433
+  sgIngressWebToDB1433:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      FromPort: 1433
+      GroupId: !Ref sgDB
+      IpProtocol: tcp
+      SourceSecurityGroupId: !Ref sgWeb
+      ToPort: 1433
+  sgEgressWebToWeb93xx:
+    Type: 'AWS::EC2::SecurityGroupEgress'
+    Properties:
+      DestinationSecurityGroupId: !Ref sgWeb
+      FromPort: 9300
+      GroupId: !Ref sgWeb
+      IpProtocol: tcp
+      ToPort: 9399
+  sgIngressWebToWeb93xx:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      FromPort: 9300
+      GroupId: !Ref sgWeb
+      IpProtocol: tcp
+      SourceSecurityGroupId: !Ref sgWeb
+      ToPort: 9399
+  sgEgressWebToWeb5xxx:
+    Type: 'AWS::EC2::SecurityGroupEgress'
+    Properties:
+      DestinationSecurityGroupId: !Ref sgWeb
+      FromPort: 5701
+      GroupId: !Ref sgWeb
+      IpProtocol: tcp
+      ToPort: 5800
+  sgIngressWebToWeb5xxx:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      FromPort: 5701
+      GroupId: !Ref sgWeb
+      IpProtocol: tcp
+      SourceSecurityGroupId: !Ref sgWeb
+      ToPort: 5800
+  sgEgressNginxToELBPrivate80:
+    Type: 'AWS::EC2::SecurityGroupEgress'
+    Properties:
+      DestinationSecurityGroupId: !Ref sgELBPrivate
+      FromPort: 80
+      GroupId: !Ref sgNginx
+      IpProtocol: tcp
+      ToPort: 80
+  sgIngressELBPrivateToNiginX80:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      FromPort: 80
+      GroupId: !Ref sgELBPrivate
+      IpProtocol: tcp
+      SourceSecurityGroupId: !Ref sgNginx
+      ToPort: 80
+  sgELBPublic:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: SG-CRP-PEGA-ELB-Public
+      SecurityGroupIngress:
+        - CidrIp: 0.0.0.0/0        
+          FromPort: 443
+          IpProtocol: tcp
+          ToPort: 443
+      Tags:
+        - Key: Name
+          Value: sgCRPPEGA-ELBPublic
+        - Key: Stack
+          Value: !Join 
+            - '-'
+            - - CRP-PEGA
+              - !Ref EnvironmentPar
+        - Key: Environment
+          Value: !Ref EnvironmentPar
+        - Key: Cost Center
+          Value: 3084020100
+        - Key: Department
+          Value: Victim Services             
+        - Key: Owner
+          Value: DTS Operation
+        - Key: Description
+          Value: !Join 
+            - '-'
+            - - CRP-PEGA
+              - !Ref EnvironmentPar
+          Value: CRP-PEGA Web
+        - Key: Type
+          Value: App
+        - Key: Application
+          Value: CRP-PEGA
+      VpcId: !Ref VPC
+  sgEgressELBPrivateToWeb80:
+    Type: 'AWS::EC2::SecurityGroupEgress'
+    Properties:
+      DestinationSecurityGroupId: !Ref sgWeb
+      GroupId: !Ref sgELBPrivate
+      IpProtocol: '-1'
+  sgIngressELBPrivateToWeb80:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      FromPort: 80
+      GroupId: !Ref sgWeb
+      IpProtocol: tcp
+      SourceSecurityGroupId: !Ref sgELBPrivate
+      ToPort: 80
+  sgIngressELBPrivateToWeb8080:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      FromPort: 8080
+      GroupId: !Ref sgWeb
+      IpProtocol: tcp
+      SourceSecurityGroupId: !Ref sgELBPrivate
+      ToPort: 8080
+
